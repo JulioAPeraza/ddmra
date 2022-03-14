@@ -75,6 +75,7 @@ def run_analyses(
     LGR.addHandler(fh)
 
     LGR.info("Preallocating matrices")
+    print("\t\tPreallocating matrices", flush=True)
     n_subjects = len(files)
 
     # Load atlas and associated masker
@@ -90,6 +91,7 @@ def run_analyses(
     distances = distances[edge_sorting_idx]
 
     LGR.info("Creating masker")
+    print("\t\tCreating masker", flush=True)
     spheres_masker = input_data.NiftiSpheresMasker(
         seeds=coords,
         radius=5.0,
@@ -104,14 +106,18 @@ def run_analyses(
     # prep for qcrsfc and high-low motion analyses
     mean_qc = np.array([np.mean(subj_qc) for subj_qc in qc])
     z_corr_mats = np.zeros((n_subjects, distances.size))
+    corr_mats = np.zeros((n_subjects, distances.size))
 
     # Get correlation matrices
     ts_all = []
     LGR.info("Building correlation matrices")
+    print("\t\tBuilding correlation matrices", flush=True)
     if confounds:
         LGR.info("Regressing confounds out of data.")
+        print("\t\tRegressing confounds out of data.", flush=True)
 
     for i_subj in range(n_subjects):
+        print(f"\t\t\tCalculating connectivity for {files[i_subj]}", flush=True)
         if confounds:
             raw_ts = spheres_masker.fit_transform(files[i_subj], confounds=confounds[i_subj]).T
         else:
@@ -120,18 +126,29 @@ def run_analyses(
         assert raw_ts.shape[0] == n_rois
 
         if np.any(np.isnan(raw_ts)):
-            raise ValueError(f"Time series of {files[i_subj]} contains NaNs")
+            raise ValueError(f"Time series of {files[i_subj]} contain NaNs")
 
         roi_variances = np.var(raw_ts, axis=1)
         if any(roi_variances == 0):
             bad_rois = np.where(roi_variances == 0)[0]
-            raise ValueError(f"ROI(s) {bad_rois} for {files[i_subj]} have variance of 0.")
+            print(f"\t\t\t\tROI(s) {bad_rois} for {files[i_subj]} have variance of 0.", flush=True)
+            # raise ValueError(f"ROI(s) {bad_rois} for {files[i_subj]} have variance of 0.")
 
         ts_all.append(raw_ts)
         raw_corrs = np.corrcoef(raw_ts)
         raw_corrs = raw_corrs[triu_idx]
         raw_corrs = raw_corrs[edge_sorting_idx]  # Sort from close to far ROI pairs
+        corr_mats[i_subj, :] = raw_corrs
         z_corr_mats[i_subj, :] = np.arctanh(raw_corrs)
+
+    np.savez_compressed(
+        op.join(out_dir, "rsfc.npz"),
+        rsfc=corr_mats,
+    )
+    np.savez_compressed(
+        op.join(out_dir, "z_rsfc.npz"),
+        rsfc=z_corr_mats,
+    )
 
     del (raw_corrs, raw_ts, spheres_masker, atlas, coords)
 
@@ -140,14 +157,15 @@ def run_analyses(
 
     # QC:RSFC r analysis
     LGR.info("Performing QC:RSFC analysis")
+    print("\t\tPerforming QC:RSFC analysis", flush=True)
     qcrsfc_values = analysis.qcrsfc_analysis(mean_qc, z_corr_mats)
     analysis_values["qcrsfc"] = qcrsfc_values
     qcrsfc_smoothing_curve = utils.moving_average(qcrsfc_values, window)
+
     qcrsfc_smoothing_curve, smoothing_curve_distances = utils.average_across_distances(
         qcrsfc_smoothing_curve,
         distances,
     )
-
     # Quick interlude to create the smoothing_curves DataFrame
     smoothing_curves = pd.DataFrame(
         columns=["qcrsfc", "highlow", "scrubbing"],
@@ -160,6 +178,7 @@ def run_analyses(
 
     # High-low motion analysis
     LGR.info("Performing high-low motion analysis")
+    print("\t\tPerforming high-low motion analysis", flush=True)
     highlow_values = analysis.highlow_analysis(mean_qc, z_corr_mats)
     analysis_values["highlow"] = highlow_values
     hl_smoothing_curve = utils.moving_average(highlow_values, window)
@@ -172,6 +191,7 @@ def run_analyses(
 
     # Scrubbing analysis
     LGR.info("Performing scrubbing analysis")
+    print("\t\tPerforming scrubbing analysis", flush=True)
     scrub_values = analysis.scrubbing_analysis(qc, ts_all, edge_sorting_idx, qc_thresh, perm=False)
     analysis_values["scrubbing"] = scrub_values
     scrub_smoothing_curve = utils.moving_average(scrub_values, window)
@@ -200,6 +220,7 @@ def run_analyses(
 
     # Null distributions
     LGR.info("Building null distributions with permutations")
+    print("\t\tBuilding null distributions with permutations", flush=True)
     qcrsfc_null_smoothing_curves, hl_null_smoothing_curves = analysis.other_null_distributions(
         qc,
         z_corr_mats,
@@ -228,6 +249,7 @@ def run_analyses(
 
     del qcrsfc_null_smoothing_curves, hl_null_smoothing_curves, scrub_null_smoothing_curves
 
-    plotting.plot_results(out_dir)
+    # plotting.plot_results(out_dir)
 
     LGR.info("Workflow completed")
+    print("\t\tWorkflow completed", flush=True)
